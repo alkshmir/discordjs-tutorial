@@ -1,32 +1,58 @@
-import { REST } from '@discordjs/rest';
-import { WebSocketManager } from '@discordjs/ws';
-import { GatewayDispatchEvents, GatewayIntentBits, InteractionType, MessageFlags, Client } from '@discordjs/core';
+require('dotenv').config();
+const fs = require('node:fs');
+const path = require('node:path');
+const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
+const token = process.env.DISCORD_TOKEN;
 
-// Create REST and WebSocket managers directly
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+// Create a new client instance
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const gateway = new WebSocketManager({
-	token: process.env.DISCORD_TOKEN,
-	intents: GatewayIntentBits.GuildMessages | GatewayIntentBits.MessageContent,
-	rest,
+client.commands = new Collection();
+
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+
+for (const file of commandFiles) {
+	const filePath = path.join(commandsPath, file);
+	const command = require(filePath);
+	// Set a new item in the Collection with the key as the command name and the value as the exported module
+	if ('data' in command && 'execute' in command) {
+		client.commands.set(command.data.name, command);
+	} else {
+		console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+	}
+}
+
+
+// When the client is ready, run this code (only once)
+// We use 'c' for the event parameter to keep it separate from the already defined 'client'
+client.once(Events.ClientReady, c => {
+	console.log(`Ready! Logged in as ${c.user.tag}`);
 });
 
-// Create a client to emit relevant events.
-const client = new Client({ rest, gateway });
+client.on(Events.InteractionCreate, async interaction => {
+	if (!interaction.isChatInputCommand()) return;
+	console.log(interaction);
 
-// Listen for interactions
-// Each event contains an `api` prop along with the event data that allows you to interface with the Discord REST API
-client.on(GatewayDispatchEvents.InteractionCreate, async ({ data: interaction, api }) => {
-	if (interaction.type !== InteractionType.ApplicationCommand || interaction.data.name !== 'ping') {
+	const command = interaction.client.commands.get(interaction.commandName);
+
+	if (!command) {
+		console.error(`No command matching ${interaction.commandName} was found.`);
 		return;
 	}
 
-	await api.interactions.reply(interaction.id, interaction.token, { content: 'Pong!', flags: MessageFlags.Ephemeral });
+	try {
+		await command.execute(interaction);
+	} catch (error) {
+		console.error(error);
+		if (interaction.replied || interaction.deferred) {
+			await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+		} else {
+			await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+		}
+	}
 });
 
-// Listen for the ready event
-client.once(GatewayDispatchEvents.Ready, () => console.log('Ready!'));
-
-// Start the WebSocket connection.
-gateway.connect();
-
+// Log in to Discord with your client's token
+client.login(token);
